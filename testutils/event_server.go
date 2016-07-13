@@ -13,6 +13,12 @@ import (
 var subscriberChannels []chan string
 var mu sync.RWMutex
 
+var pingHandler func(appData string) error
+
+func SetPingHandler(f func(appData string) error) {
+	pingHandler = f
+}
+
 func ResetTestServer() {
 	mu.Lock()
 	defer mu.Unlock()
@@ -20,6 +26,7 @@ func ResetTestServer() {
 		close(channel)
 	}
 	subscriberChannels = subscriberChannels[:0]
+	pingHandler = nil
 }
 
 func publishHandler(w http.ResponseWriter, req *http.Request) {
@@ -47,6 +54,11 @@ func subscribeHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// This is ugly, but it is the only way we can override the ping handler without a big refactor
+	if pingHandler != nil {
+		ws.SetPingHandler(pingHandler)
+	}
+
 	resultChan := make(chan string)
 	mu.Lock()
 	subscriberChannels = append(subscriberChannels, resultChan)
@@ -69,9 +81,11 @@ func pushToSubscribers(message string) {
 func writeEventToSubscriber(ws *websocket.Conn, c chan string) {
 	for {
 		event := <-c
-		err := ws.WriteMessage(websocket.TextMessage, []byte(event))
-		if err != nil {
-			log.WithFields(log.Fields{"error": err, "msg": event}).Fatal("Could not write message.")
+		if event != "" {
+			err := ws.WriteMessage(websocket.TextMessage, []byte(event))
+			if err != nil {
+				log.Errorf("Could not write message. Error: %v. Event: %v", err, event)
+			}
 		}
 	}
 }
