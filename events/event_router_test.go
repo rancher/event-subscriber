@@ -18,7 +18,7 @@ const eventServerPort string = "8005"
 const baseURL string = "http://localhost:" + eventServerPort
 const pushURL string = baseURL + "/pushEvent"
 
-func newRouter(eventHandlers map[string]EventHandler, workerCount int, t *testing.T) *EventRouter {
+func newRouter(eventHandlers map[string]EventHandler, workerCount int, t *testing.T, pingConfig PingConfig) *EventRouter {
 	// Mock out these functions
 	createNewHandler = func(externalHandler *client.ExternalHandler, apiClient *client.RancherClient) error {
 		return nil
@@ -28,11 +28,48 @@ func newRouter(eventHandlers map[string]EventHandler, workerCount int, t *testin
 	}
 	fakeAPIClient := &client.RancherClient{}
 	router, err := NewEventRouter("testRouter", 2000, baseURL, "accKey", "secret", fakeAPIClient,
-		eventHandlers, "physicalhost", workerCount)
+		eventHandlers, "physicalhost", workerCount, pingConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return router
+}
+
+func TestWebsocketPingTimeout(t *testing.T) {
+	testHandler := func(event *Event, apiClient *client.RancherClient) error {
+		return nil
+	}
+
+	tu.SetPingHandler(func(appData string) error {
+		return nil
+	})
+
+	eventHandlers := map[string]EventHandler{"physicalhost.create": testHandler}
+	router := newRouter(eventHandlers, 3, t, PingConfig{
+		SendPingInterval:  500,
+		CheckPongInterval: 500,
+		MaxPongWait:       1000,
+	})
+	ready := make(chan bool, 1)
+
+	routerStopped := make(chan bool, 1)
+	go func() {
+		router.Start(ready)
+		routerStopped <- true
+	}()
+
+	defer tu.ResetTestServer()
+
+	// Wait for start to be ready
+	<-ready
+
+	select {
+	case <-routerStopped:
+		// Successfully shutdown after missed pings
+	case <-time.After(time.Millisecond * 1500):
+		t.Fatalf("Router did not stop because of failed pings.")
+	}
+
 }
 
 // Tests the simplest case of successfully receiving, routing, and handling
@@ -45,7 +82,7 @@ func TestSimpleRouting(t *testing.T) {
 	}
 
 	eventHandlers := map[string]EventHandler{"physicalhost.create": testHandler}
-	router := newRouter(eventHandlers, 3, t)
+	router := newRouter(eventHandlers, 3, t, DefaultPingConfig)
 	ready := make(chan bool, 1)
 	go router.Start(ready)
 	defer router.Stop()
@@ -97,7 +134,7 @@ func TestEventDropping(t *testing.T) {
 	eventHandlers := map[string]EventHandler{"physicalhost.create": testHandler}
 
 	// 2 workers, not 3, means the last event should be droppped
-	router := newRouter(eventHandlers, 2, t)
+	router := newRouter(eventHandlers, 2, t, DefaultPingConfig)
 	ready := make(chan bool, 1)
 	go router.Start(ready)
 	defer router.Stop()
@@ -145,7 +182,7 @@ func TestWorkerReuse(t *testing.T) {
 
 	eventHandlers := map[string]EventHandler{"physicalhost.create": testHandler}
 
-	router := newRouter(eventHandlers, 1, t)
+	router := newRouter(eventHandlers, 1, t, DefaultPingConfig)
 	ready := make(chan bool, 1)
 	go router.Start(ready)
 	defer router.Stop()
