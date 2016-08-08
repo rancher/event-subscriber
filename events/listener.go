@@ -3,6 +3,7 @@ package events
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 
 	"io/ioutil"
 	"net/http"
@@ -129,6 +130,7 @@ func (router *EventRouter) run(ready chan<- bool, eventSuffix string) (err error
 	}
 
 	ph := newPongHandler(router)
+	defer ph.stop()
 	router.eventStream.SetPongHandler(ph.handle)
 	go router.sendWebsocketPings()
 
@@ -156,6 +158,93 @@ func (router *EventRouter) run(ready chan<- bool, eventSuffix string) (err error
 	}
 }
 
+func (router *EventRouter) Run() {
+	log.Info("Initializing event router")
+
+	subscribeParams := url.Values{}
+	for event := range router.eventHandlers {
+		subscribeParams.Add("eventNames", event)
+	}
+
+	for errcnt := 0; ; errcnt++ {
+		if err := router.connectAndHandleEvents(subscribeParams); err != nil {
+			log.Warnf("Error working with websocket: %s", err)
+		}
+		log.Infof("Re-establishing websocket connection in %v seconds ...", errcnt)
+		time.Sleep(time.Duration(errcnt) * time.Second)
+	}
+}
+
+func (router *EventRouter) connectAndHandleEvents(subscribeParams url.Values) error {
+	eventStream, err := router.subscribeToEvents(router.subscribeURL, router.accessKey, router.secretKey, subscribeParams)
+	if err != nil {
+		log.Errorf("Error getting websocket connection: %s", err)
+		return err
+	}
+	router.eventStream = eventStream
+	defer router.Stop()
+	log.Info("Connection established")
+
+	ph := newPongHandler(router)
+	defer ph.stop()
+	router.eventStream.SetPongHandler(ph.handle)
+	go router.sendWebsocketPings()
+
+	msgChan := make(chan []byte)
+	defer close(msgChan)
+	go router.readMsgChan(msgChan)
+
+	for {
+		_, message, err := router.eventStream.ReadMessage()
+		if err != nil {
+			// Error here means the connection is closed. It's normal, so just return.
+			log.Warnf("Error reading message: websocket closed: %s", err)
+			return err
+		}
+		message = bytes.TrimSpace(message)
+		if len(message) == 0 {
+			continue
+		}
+		msgChan <- message
+	}
+}
+
+func (router *EventRouter) readMsgChan(msgChan chan []byte) {
+	for msg := range msgChan {
+		router.processMessage(msg)
+	}
+}
+
+func (router *EventRouter) processMessage(rawEvent []byte) {
+	var event *Event
+	if err := json.Unmarshal(rawEvent, &event); err != nil {
+		log.Errorf("Error unmarshalling event: %s", err)
+		return
+	}
+
+	if event.Name != "ping" {
+		log.WithFields(log.Fields{
+			"event": string(rawEvent[:]),
+		}).Debug("Processing event.")
+	}
+
+	if fn, ok := router.eventHandlers[event.Name]; ok {
+		go func() {
+			if err := fn(event, router.apiClient); err != nil {
+				log.WithFields(log.Fields{
+					"eventName":  event.Name,
+					"eventId":    event.ID,
+					"resourceId": event.ResourceID,
+				}).Errorf("Error processing event: %s", err)
+			}
+		}()
+	} else {
+		log.WithFields(log.Fields{
+			"eventName": event.Name,
+		}).Warn("No event handler registered for event")
+	}
+}
+
 func (router *EventRouter) Stop() {
 	router.eventStream.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	router.eventStream.Close()
@@ -169,16 +258,21 @@ func (router *EventRouter) subscribeToEvents(subscribeURL string, accessKey stri
 	ws, resp, err := dialer.Dial(subscribeURL, headers)
 
 	if err != nil {
-		defer resp.Body.Close()
-		body, _ := ioutil.ReadAll(resp.Body)
 		log.WithFields(log.Fields{
-			"status":          resp.Status,
-			"statusCode":      resp.StatusCode,
-			"responseHeaders": resp.Header,
-			"responseBody":    string(body[:]),
-			"error":           err,
 			"subscribeUrl":    subscribeURL,
-		}).Error("Failed to subscribe to events.")
+		}).Errorf("Error subscribing to events: %s", err)
+		if resp != nil {
+			log.WithFields(log.Fields{
+				"status":          resp.Status,
+				"statusCode":      resp.StatusCode,
+				"responseHeaders": resp.Header,
+			}).Error("Got error response")
+			if resp.Body != nil {
+				defer resp.Body.Close()
+				body, _ := ioutil.ReadAll(resp.Body)
+				log.Errorf("Error response: %s", body)
+			}
+		}
 		return nil, err
 	}
 	return ws, nil
