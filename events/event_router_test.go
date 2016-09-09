@@ -11,7 +11,7 @@ import (
 	"time"
 
 	tu "github.com/rancher/event-subscriber/testutils"
-	"github.com/rancher/go-rancher/client"
+	"github.com/rancher/go-rancher/v2"
 )
 
 const eventServerPort string = "8005"
