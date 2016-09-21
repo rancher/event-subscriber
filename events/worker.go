@@ -10,7 +10,12 @@ type EventLocker func(event *Event) locks.Locker
 
 func nopLocker(_ *Event) locks.Locker { return locks.NopLocker() }
 
-func resourceIDLocker(event *Event) locks.Locker { return locks.KeyLocker(event.ResourceID) }
+func resourceIDLocker(event *Event) locks.Locker {
+	if event.ResourceID == "" {
+		return locks.NopLocker()
+	}
+	return locks.KeyLocker(event.ResourceID)
+}
 
 type WorkerPool interface {
 	HandleWork(event *Event, eventHandlers map[string]EventHandler, apiClient *client.RancherClient)
