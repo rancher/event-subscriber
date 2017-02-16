@@ -187,6 +187,7 @@ func (router *EventRouter) subscribeToEvents(subscribeURL string, accessKey stri
 				log.Errorf("Error response: %s", body)
 			}
 		}
+		ws.Close()
 		return nil, err
 	}
 	return ws, nil
