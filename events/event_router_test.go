@@ -11,7 +11,7 @@ import (
 	"time"
 
 	tu "github.com/rancher/event-subscriber/testutils"
-	"github.com/rancher/go-rancher/v2"
+	"github.com/rancher/go-rancher/v3"
 )
 
 const eventServerPort string = "8005"
@@ -19,13 +19,6 @@ const baseURL string = "http://localhost:" + eventServerPort
 const pushURL string = baseURL + "/pushEvent"
 
 func newRouter(eventHandlers map[string]EventHandler, workerCount int, t *testing.T, pingConfig PingConfig) *EventRouter {
-	// Mock out these functions
-	createNewHandler = func(externalHandler *client.ExternalHandler, apiClient *client.RancherClient) error {
-		return nil
-	}
-	removeOldHandler = func(name string, apiClient *client.RancherClient) error {
-		return nil
-	}
 	fakeAPIClient := &client.RancherClient{}
 	router, err := NewEventRouter("testRouter", 2000, baseURL, "accKey", "secret", fakeAPIClient,
 		eventHandlers, "physicalhost", workerCount, pingConfig)
