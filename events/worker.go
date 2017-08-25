@@ -74,7 +74,6 @@ func (wp *nonSkippingWorkerPool) HandleWork(event *Event, eventHandlers map[stri
 }
 
 func doWork(event *Event, eventHandlers map[string]EventHandler, apiClient *client.RancherClient, locker locks.Locker) {
-
 	if event.Name != "ping" {
 		log.WithFields(log.Fields{
 			"event": *event,
