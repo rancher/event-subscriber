@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,11 +21,12 @@ const pushURL string = baseURL + "/pushEvent"
 
 func newRouter(eventHandlers map[string]EventHandler, workerCount int, t *testing.T, pingConfig PingConfig) *EventRouter {
 	fakeAPIClient := &client.RancherClient{}
-	router, err := NewEventRouter("testRouter", 2000, baseURL, "accKey", "secret", fakeAPIClient,
-		eventHandlers, "physicalhost", workerCount, pingConfig)
+	router, err := NewEventRouter(fakeAPIClient, workerCount, eventHandlers)
 	if err != nil {
 		t.Fatal(err)
 	}
+	router.subscribeURL = strings.Replace(baseURL+"/subscribe", "http", "ws", 1)
+	router.PingConfig = pingConfig
 	return router
 }
 
@@ -77,7 +79,7 @@ func TestSimpleRouting(t *testing.T) {
 	eventHandlers := map[string]EventHandler{"physicalhost.create": testHandler}
 	router := newRouter(eventHandlers, 3, t, DefaultPingConfig)
 	ready := make(chan bool, 1)
-	go router.Start(ready)
+	go router.StartHandler("testRouter", ready)
 	defer router.Stop()
 	defer tu.ResetTestServer()
 	// Wait for start to be ready
@@ -129,7 +131,7 @@ func TestEventDropping(t *testing.T) {
 	// 2 workers, not 3, means the last event should be droppped
 	router := newRouter(eventHandlers, 2, t, DefaultPingConfig)
 	ready := make(chan bool, 1)
-	go router.Start(ready)
+	go router.StartHandler("testRouter", ready)
 	defer router.Stop()
 	defer tu.ResetTestServer()
 	// Wait for start to be ready
@@ -177,7 +179,7 @@ func TestWorkerReuse(t *testing.T) {
 
 	router := newRouter(eventHandlers, 1, t, DefaultPingConfig)
 	ready := make(chan bool, 1)
-	go router.Start(ready)
+	go router.StartHandler("testRouter", ready)
 	defer router.Stop()
 	defer tu.ResetTestServer()
 	// Wait for start to be ready
